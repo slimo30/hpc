@@ -38,4 +38,4 @@ code/profiling_results/
 code/README_KIDS.md
 
 # Ignore profiling results folder
-code/profiling_results/
+code/profiling_results/**
