@@ -32,3 +32,10 @@ code/profiling_results/
 
 # …but keep this one
 !project_final_acp.pdf
+
+
+# Ignore this specific markdown file
+code/README_KIDS.md
+
+# Ignore profiling results folder
+code/profiling_results/
