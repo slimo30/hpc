@@ -1,0 +1,255 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}  % ADD THIS - Must come after inputenc
+\usepackage[french]{babel}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{graphicx}
+\usepackage{fancyhdr}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{amsmath}
+
+% Fix header height warning
+\setlength{\headheight}{14.49998pt}
+
+% En-tête et pied de page
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Projet final ACP}
+\lhead{Programmation parallèle en Python - Bioinformatique}
+\cfoot{\thepage}
+
+% Style code
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny,
+    frame=single,
+    breaklines=true,
+    literate={é}{{\'{e}}}1 {è}{{\`{e}}}1 {ê}{{\^{e}}}1 {à}{{\`{a}}}1
+}
+
+\title{\textbf{Projet final ACP}\\
+Programmation parallèle en Python appliquée à la bio-informatique\\
+\textbf{Needleman-Wunsch : Alignement global parallèle}}
+\author{
+Étudiant 1 : HALFAOUI Abderrahim Louay \\
+N° Étudiant : 212133024640 \\
+\vspace{0.5cm}\\
+Étudiant 2 : HOUACHE Elhadj Slimane \\
+N° Étudiant : 212139088214
+}
+\date{Décembre 2025}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\newpage
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+Ce projet porte sur la parallélisation de l'algorithme Needleman-Wunsch pour l'alignement global de deux séquences d'ADN. Cet algorithme de programmation dynamique, d'une complexité temporelle $O(n^2)$, constitue un excellent candidat pour la parallélisation sur architectures multi-cœurs grâce à sa structure en anti-diagonales indépendantes.
+
+Les objectifs sont :
+\begin{itemize}
+    \item Implémentation séquentielle et profiling des goulots d'étranglement
+    \item Proposition d'un modèle de parallélisation multi-cœurs
+    \item Implémentation parallèle avec \texttt{multiprocessing}
+    \item Mesure d'accélération et d'efficacité
+\end{itemize}
+
+\section{Présentation de l'algorithme Needleman-Wunsch}
+
+\subsection{Étapes principales}
+L'algorithme se décompose en trois phases :
+\begin{enumerate}
+    \item \textbf{Initialisation} : Matrice $(n+1) \times (m+1)$ avec pénalités de gap sur les bords
+    \item \textbf{Remplissage} : Pour chaque cellule $(i,j)$ : $\max(\text{diag}, \text{up}, \text{left})$
+    \item \textbf{Traceback} : Reconstruction de l'alignement depuis $(n,m)$ vers $(0,0)$
+\end{enumerate}
+
+\subsection{Pseudo-code}
+\begin{lstlisting}
+Fonction Needleman_Wunsch(seq1, seq2, match, mismatch, gap):
+    Creer matrice F de taille (len(seq1)+1) x (len(seq2)+1)
+    Initialiser F[i,0] = i*gap et F[0,j] = j*gap
+    Pour i de 1 a len(seq1):
+        Pour j de 1 a len(seq2):
+            diag = F[i-1,j-1] + score(seq1[i],seq2[j])
+            up = F[i-1,j] + gap
+            left = F[i,j-1] + gap
+            F[i,j] = max(diag, up, left)
+    Traceback depuis F[n,m] pour construire alignements
+    Retourner align1, align2, score optimal
+\end{lstlisting}
+
+\section{Complexité}
+\begin{itemize}
+    \item \textbf{Temporelle} : $O(nm)$ - chaque cellule calculée en temps constant
+    \item \textbf{Spatiale} : $O(nm)$ - stockage de la matrice complète
+\end{itemize}
+
+Pour des séquences biologiques typiques ($n,m \approx 10^3-10^4$), le temps devient prohibitif.
+
+\section{Profiling et goulots d'étranglement}
+
+Afin d'identifier les parties les plus coûteuses de l'algorithme Needleman--Wunsch, un profiling de la version séquentielle a été réalisé à l'aide de l'outil \texttt{cProfile} intégré à Python. Les expérimentations ont été menées sur des séquences d'ADN générées aléatoirement de taille $n = m = 500$.
+
+\subsection{Méthodologie de profiling}
+
+Le profiling consiste à mesurer le nombre d'appels et le temps d'exécution de chaque fonction durant l'exécution du programme. L'outil \texttt{cProfile} permet d'obtenir le temps cumulé (\textit{cumulative time}) passé dans chaque fonction, ce qui facilite l'identification des goulots d'étranglement.
+
+Chaque expérience a été répétée plusieurs fois avec des séquences différentes afin de vérifier la stabilité des mesures. Les résultats obtenus sont cohérents d'une exécution à l'autre, ce qui montre que le temps d'exécution dépend principalement de la taille des séquences et non de leur contenu.
+
+\subsection{Résultats du profiling}
+
+Un extrait représentatif des résultats du profiling est présenté ci-dessous :
+
+\begin{lstlisting}
+259055 function calls in 0.106 seconds
+
+ncalls  tottime  cumtime  function
+----------------------------------
+1       0.079    0.102    Needleman_Wunsch
+250000  0.024    0.024    builtins.max
+\end{lstlisting}
+
+L'analyse de ces résultats montre que la fonction \texttt{Needleman\_Wunsch} consomme plus de 95\% du temps total d'exécution. À l'intérieur de cette fonction, l'appel répété à l'instruction \texttt{max} est effectué environ $250\,000$ fois, ce qui correspond exactement au nombre de cellules de la matrice de programmation dynamique ($n \times m$).
+
+\subsection{Identification du goulot d'étranglement}
+
+Le principal goulot d'étranglement est clairement identifié comme étant la phase de remplissage de la matrice de scores, réalisée par la double boucle imbriquée suivante :
+
+\begin{lstlisting}
+for i in range(1, n + 1):
+    for j in range(1, m + 1):
+        Matrix[i][j] = max(diag, up, left)
+\end{lstlisting}
+
+Cette partie représente environ 75 à 80\% du temps d'exécution total de l'algorithme et possède une complexité temporelle de $O(nm)$. Chaque cellule de la matrice nécessite un calcul simple mais dépend des valeurs des cellules voisines $(i-1,j)$, $(i,j-1)$ et $(i-1,j-1)$.
+
+\subsection{Analyse de la phase de traceback}
+
+La phase de traceback, utilisée pour reconstruire l'alignement optimal à partir de la matrice, a été mesurée séparément à l'aide de \texttt{time.perf\_counter}. Le temps observé pour cette phase est de l'ordre de $4 \times 10^{-5}$ secondes, ce qui représente une fraction négligeable du temps total d'exécution.
+
+Par conséquent, la phase de traceback ne constitue pas un goulot d'étranglement et ne représente pas une cible pertinente pour la parallélisation.
+
+\subsection{Conclusion}
+
+L'analyse par profiling montre que le calcul de la matrice de programmation dynamique est de loin la partie la plus coûteuse de l'algorithme Needleman--Wunsch. Cette phase constitue donc le principal goulot d'étranglement et la meilleure candidate à une parallélisation. En raison des dépendances locales entre cellules, une parallélisation par anti-diagonales (ou \textit{wavefront parallelism}) apparaît comme la stratégie la plus adaptée, ce qui sera détaillé dans la section suivante.
+
+\section{Modèle de parallélisation}
+
+L'algorithme Needleman-Wunsch repose sur une matrice de programmation dynamique où chaque cellule $(i,j)$ dépend uniquement des trois cellules voisines $(i-1,j)$, $(i,j-1)$ et $(i-1,j-1)$.  
+Cette dépendance locale impose une contrainte sur l'ordre de calcul des cellules.
+
+Cependant, une observation clé permet la parallélisation :  
+\textbf{toutes les cellules appartenant à une même anti-diagonale (i+j = constante) sont indépendantes entre elles}.
+
+\subsection{Principe des anti-diagonales}
+
+Soit une matrice $F$ de taille $(n+1)\times(m+1)$.  
+Les cellules peuvent être regroupées par anti-diagonales définies par :
+\[
+d = i + j \quad \text{avec} \quad d \in [2, n+m]
+\]
+
+Pour une anti-diagonale donnée $d$, toutes les cellules $(i,j)$ telles que $i+j=d$ peuvent être calculées en parallèle, car leurs dépendances appartiennent uniquement à l'anti-diagonale précédente $(d-1)$.
+
+\subsection{Stratégie de parallélisation}
+
+La stratégie adoptée est la suivante :
+\begin{itemize}
+    \item Calcul séquentiel des bords de la matrice (initialisation)
+    \item Parcours des anti-diagonales une par une
+    \item Parallélisation du calcul des cellules d'une même anti-diagonale
+    \item Synchronisation implicite entre les anti-diagonales
+\end{itemize}
+
+Ce modèle respecte les dépendances de données tout en exploitant le parallélisme offert par les architectures multi-cœurs.
+
+\section{Implémentation parallèle}
+
+La parallélisation a été réalisée sur CPU en utilisant le module \texttt{concurrent.futures.ThreadPoolExecutor}.  
+Ce choix est motivé par :
+\begin{itemize}
+    \item La compatibilité avec le système Windows
+    \item La simplicité de mise en œuvre
+    \item L'absence de dépendances externes
+\end{itemize}
+
+Chaque anti-diagonale est traitée comme une étape synchronisée.  
+À l'intérieur de cette étape, chaque cellule est calculée par un thread distinct.
+
+\subsection{Gestion du temps d'exécution}
+
+Le temps d'exécution est mesuré en \textbf{temps réel (wall-clock time)} à l'aide de la fonction \texttt{time.perf\_counter()}.  
+Il n'est pas pertinent de sommer les temps d'exécution des threads, car ceux-ci s'exécutent en parallèle.
+
+Deux mesures sont collectées :
+\begin{itemize}
+    \item Temps de remplissage de la matrice
+    \item Temps de la phase de traceback
+\end{itemize}
+
+Ces mesures permettent une comparaison directe avec la version séquentielle.
+
+\subsection{Limitations}
+
+Bien que le calcul des anti-diagonales soit parallélisé, les limitations suivantes subsistent :
+\begin{itemize}
+    \item Le \textit{Global Interpreter Lock (GIL)} limite le parallélisme réel en Python
+    \item Les accès concurrents à la matrice entraînent un surcoût de synchronisation
+\end{itemize}
+
+Malgré cela, cette implémentation permet de démontrer concrètement le modèle de parallélisation de l'algorithme.
+
+\section{Résultats de performance}
+
+Les tests ont été effectués sur des séquences ADN générées aléatoirement de taille $n = m = 100$.  
+Chaque test a été répété plusieurs fois afin de garantir la stabilité des mesures.
+
+\subsection{Résultats du profiling}
+
+L'analyse avec \texttt{cProfile} montre que :
+\begin{itemize}
+    \item Plus de 75\% du temps d'exécution est consommé par la fonction \texttt{Needleman\_Wunsch}
+    \item L'appel à la fonction \texttt{max()} dans la double boucle représente le principal goulot d'étranglement
+    \item La phase de traceback est négligeable (moins de 1\%)
+\end{itemize}
+
+Ces résultats confirment que la phase de remplissage de la matrice est la cible principale de la parallélisation.
+
+\subsection{Comparaison séquentiel vs parallèle}
+
+\begin{center}
+\begin{tabular}{|c|c|c|}
+\hline
+Version & Temps matrice (s) & Temps traceback (s) \\
+\hline
+Séquentielle & $\approx 2.4 \times 10^{-3}$ & $\approx 4.0 \times 10^{-5}$ \\
+Parallèle & Réduit partiellement & Inchangé \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{Analyse}
+
+Le gain de performance reste modéré pour des tailles de données réduites, en raison :
+\begin{itemize}
+    \item du coût de création des threads
+    \item du GIL de Python
+\end{itemize}
+
+Cependant, pour des séquences plus longues, la parallélisation par anti-diagonales devient plus avantageuse et constitue une base solide pour une implémentation GPU ou C/C++.
+
+\end{document}
